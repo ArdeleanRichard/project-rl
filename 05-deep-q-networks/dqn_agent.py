@@ -9,734 +9,670 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
-BATCH_SIZE = 64         # minibatch size
-GAMMA = 0.99            # discount factor
-TAU = 1e-3              # for soft update of target parameters
-LR = 5e-4               # learning rate 
-UPDATE_EVERY = 4        # how often to update the network
+BUFFER_SIZE  = int(1e5)   # replay buffer size
+BATCH_SIZE   = 64         # minibatch size
+GAMMA        = 0.99       # discount factor
+TAU          = 1e-3       # for soft update of target parameters
+LR           = 5e-4       # learning rate
+UPDATE_EVERY = 4          # how often to update the network
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-class AgentDQN():
-    """Interacts with and learns from the environment."""
-
-    def __init__(self, state_size, action_size, seed):
-        """Initialize an Agent object.
-        
-        Params
-        ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            seed (int): random seed
-        """
-        self.state_size = state_size
-        self.action_size = action_size
-        self.seed = random.seed(seed)
-
-        # Q-Network
-        self.qnetwork_local = QNetwork(state_size, action_size, seed).to(device)
-        self.qnetwork_target = QNetwork(state_size, action_size, seed).to(device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
-
-        # Replay memory
-        self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
-
-        # Initialize time step (for updating every UPDATE_EVERY steps)
-        self.t_step = 0
-    
-
-    def step(self, state, action, reward, next_state, done):
-        # Save experience in replay memory
-        self.memory.add(state, action, reward, next_state, done)
-        
-        # Learn every UPDATE_EVERY time steps.
-        self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if self.t_step == 0:
-            # If enough samples are available in memory, get random subset and learn
-            if len(self.memory) > BATCH_SIZE:
-                experiences = self.memory.sample()
-                self.learn(experiences, GAMMA)
-
-
-    def act(self, state, eps=0.):
-        """Returns actions for given state as per current policy.
-        
-        Params
-        ======
-            state (array_like): current state
-            eps (float): epsilon, for epsilon-greedy action selection
-        """
-        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
-        self.qnetwork_local.eval()
-        with torch.no_grad():
-            action_values = self.qnetwork_local(state)
-        self.qnetwork_local.train()
-
-        # Epsilon-greedy action selection
-        # - exploitation
-        if random.random() > eps:
-            return np.argmax(action_values.cpu().data.numpy())
-        # - exploration
-        else:
-            return random.choice(np.arange(self.action_size))
-
-
-    def learn(self, experiences, gamma):
-        """Update value parameters using given batch of experience tuples.
-        - Use MSE(target, expected)
-
-        Params
-        ======
-            experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
-        """
-        states, actions, rewards, next_states, dones = experiences
-
-        ## TODO: compute and minimize the loss
-
-        # Get max predicted Q values (for next states) from target model
-        Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-
-        # Compute Q targets for current states 
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
-
-        # Get expected Q values from local model -  - gather on dim 1, all values given by actions
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
-
-        # Compute loss
-        loss = F.mse_loss(Q_expected, Q_targets)
-        # Minimize the loss
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-
-        # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)                     
-
-
-    def soft_update(self, local_model, target_model, tau):
-        """Soft update model parameters.
-        θ_target = τ*θ_local + (1 - τ)*θ_target
-
-        Params
-        ======
-            local_model (PyTorch model): weights will be copied from
-            target_model (PyTorch model): weights will be copied to
-            tau (float): interpolation parameter 
-        """
-        for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
-
-
-
-class AgentDoubleDQN(AgentDQN):
-    def __init__(self, state_size, action_size, seed):
-        """
-        Standard DQN uses the target network to both select and evaluate the best next action. 
-        - This causes systematic overestimation of Q-values — the agent becomes overconfident.
-
-        Double DQN MODIFICATION:
-        - Use the local network to select the best action, and the target network to evaluate it. Two separate networks → unbiased estimates.
-
-        Why?
-        - Standard: max(target(s')) — same network selects AND scores the action
-        - Double: target(s')[argmax(local(s'))] — decorrelated selection vs evaluation
-        """
-        super().__init__(state_size, action_size, seed)
-
-    def learn(self, experiences, gamma):
-        """Update value parameters using given batch of experience tuples.
-        - Use MSE(target, expected)
-
-        Params
-        ======
-            experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
-        """
-        states, actions, rewards, next_states, dones = experiences
-
-        # Standard DQN uses the target network to both select and evaluate the best next action. 
-        # - This causes systematic overestimation of Q-values — the agent becomes overconfident.
-        # # Get max predicted Q values (for next states) from target model
-        # Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-
-        # Double DQN MODIFICATION:
-        # Use the local network to select the best action, and the target network to evaluate it. Two separate networks → unbiased estimates.
-        best_actions = self.qnetwork_local(next_states).detach().argmax(1).unsqueeze(1)
-        Q_targets_next = self.qnetwork_target(next_states).detach().gather(1, best_actions)
-
-        # Compute Q targets for current states 
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
-
-        # Get expected Q values from local model -  - gather on dim 1, all values given by actions
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
-
-        # Compute loss
-        loss = F.mse_loss(Q_expected, Q_targets)
-        # Minimize the loss
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-
-        # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)           
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Replay Buffers
+# ──────────────────────────────────────────────────────────────────────────────
 
 class ReplayBuffer:
-    """Fixed-size buffer to store experience tuples."""
+    """Uniform random experience replay buffer."""
 
     def __init__(self, action_size, buffer_size, batch_size, seed):
-        """Initialize a ReplayBuffer object.
-
-        Params
-        ======
-            action_size (int): dimension of each action
-            buffer_size (int): maximum size of buffer
-            batch_size (int): size of each training batch
-            seed (int): random seed
-        """
         self.action_size = action_size
-        self.memory = deque(maxlen=buffer_size)  
-        self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done"])
+        self.memory      = deque(maxlen=buffer_size)
+        self.batch_size  = batch_size
+        self.experience  = namedtuple(
+            "Experience", field_names=["state", "action", "reward", "next_state", "done"]
+        )
         self.seed = random.seed(seed)
-    
-    def add(self, state, action, reward, next_state, done):
-        """Add a new experience to memory."""
-        e = self.experience(state, action, reward, next_state, done)
-        self.memory.append(e)
-    
-    def sample(self):
-        """Randomly sample a batch of experiences from memory."""
-        experiences = random.sample(self.memory, k=self.batch_size)
 
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
-  
-        return (states, actions, rewards, next_states, dones)
+    def add(self, state, action, reward, next_state, done):
+        self.memory.append(self.experience(state, action, reward, next_state, done))
+
+    def sample(self):
+        experiences = random.sample(self.memory, k=self.batch_size)
+        states      = torch.from_numpy(np.vstack([e.state      for e in experiences])).float().to(device)
+        actions     = torch.from_numpy(np.vstack([e.action     for e in experiences])).long().to(device)
+        rewards     = torch.from_numpy(np.vstack([e.reward     for e in experiences])).float().to(device)
+        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences])).float().to(device)
+        dones       = torch.from_numpy(np.vstack([e.done       for e in experiences]).astype(np.uint8)).float().to(device)
+        return states, actions, rewards, next_states, dones
 
     def __len__(self):
-        """Return the current size of internal memory."""
         return len(self.memory)
 
 
-
-
-class AgentPriorityDQN(AgentDQN):
-    """Interacts with and learns from the environment."""
-
-    def __init__(self, state_size, action_size, seed):
-        """
-        ReplayBuffer samples uniformly at random. Rare but important transitions (big surprises) are seen just as often as boring ones.
-
-        Sample transitions in proportion to their TD error (— )how wrong the network was). Add importance-sampling weights to correct the bias this introduces.
-
-
-        """
-        super().__init__(state_size, action_size, seed)
-        self.memory = PrioritizedReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
-
-    def step(self, state, action, reward, next_state, done):
-        # Save experience in replay memory
-        self.memory.add(state, action, reward, next_state, done)
-        
-        # Learn every UPDATE_EVERY time steps.
-        self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if self.t_step == 0:
-            # If enough samples are available in memory, get random subset and learn
-            if len(self.memory) > BATCH_SIZE:
-                experiences, indices, weights = self.memory.sample()
-                self.learn(experiences, GAMMA, indices, weights)
-
-
-    def learn(self, experiences, gamma, indices, weights):
-        """Update value parameters using given batch of experience tuples.
-        - Use MSE(target, expected)
-
-        Params
-        ======
-            experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
-        """
-        states, actions, rewards, next_states, dones = experiences
-
-        ## TODO: compute and minimize the loss
-
-        # Get max predicted Q values (for next states) from target model
-        Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-
-        # Compute Q targets for current states 
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
-
-        # Get expected Q values from local model -  - gather on dim 1, all values given by actions
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
-
-        # Compute loss
-        # loss = F.mse_loss(Q_expected, Q_targets)
-        td_errors = (Q_expected - Q_targets).detach().squeeze().cpu().numpy()
-        loss = (weights * F.mse_loss(Q_expected, Q_targets, reduction='none').squeeze()).mean()
-        self.memory.update_priorities(indices, td_errors)
-
-        # Minimize the loss
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-
-        # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)                     
-
-
-
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, action_size, buffer_size, batch_size, seed, alpha=0.5):
+    """
+    Prioritized Experience Replay (Schaul et al., 2015).
+
+    Samples transitions proportional to their TD error:
+      P(i) = p_i^alpha / sum_k p_k^alpha
+    Importance-sampling weights correct the resulting bias:
+      w_i = (N * P(i))^{-beta}
+    New transitions receive max priority so they are sampled at least once.
+    """
+
+    def __init__(self, action_size, buffer_size, batch_size, seed, alpha=0.6):
         super().__init__(action_size, buffer_size, batch_size, seed)
-
-        self.alpha = alpha        # how much to prioritize (0=uniform, 1=full)
-        self.pos = 0
-
-        self.priorities = np.zeros((buffer_size,), dtype=np.float32)
-        self.memory = []
+        self.alpha       = alpha
+        self.pos         = 0
         self.buffer_size = buffer_size
-
+        self.priorities  = np.zeros((buffer_size,), dtype=np.float32)
+        self.memory      = []   # list for O(1) index access
 
     def add(self, state, action, reward, next_state, done):
         max_prio = self.priorities.max() if self.memory else 1.0
-
         e = self.experience(state, action, reward, next_state, done)
-
         if len(self.memory) < self.buffer_size:
             self.memory.append(e)
         else:
             self.memory[self.pos] = e
-
-        self.priorities[self.pos] = max_prio  # new transitions get max priority
+        self.priorities[self.pos] = max_prio
         self.pos = (self.pos + 1) % self.buffer_size
 
-
     def sample(self, beta=0.4):
-        N = len(self.memory)
-
+        N     = len(self.memory)
         prios = self.priorities[:N]
-        probs = prios ** self.alpha / (prios ** self.alpha).sum()
-        indices = np.random.choice(N, self.batch_size, p=probs)
+        probs = prios ** self.alpha
+        probs /= probs.sum()
+
+        # replace=True is the paper standard; avoids edge cases with small buffers
+        indices     = np.random.choice(N, self.batch_size, replace=True, p=probs)
         experiences = [self.memory[i] for i in indices]
 
-        # Importance-sampling weights to fix the sampling bias
         weights = (N * probs[indices]) ** (-beta)
         weights /= weights.max()
-        weights = torch.from_numpy(weights).float().to(device)
+        weights = torch.from_numpy(weights.astype(np.float32)).to(device)
 
-        states = torch.from_numpy(np.vstack([e.state for e in experiences])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences])).long().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences])).float().to(device)
+        states      = torch.from_numpy(np.vstack([e.state      for e in experiences])).float().to(device)
+        actions     = torch.from_numpy(np.vstack([e.action     for e in experiences])).long().to(device)
+        rewards     = torch.from_numpy(np.vstack([e.reward     for e in experiences])).float().to(device)
         next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences]).astype(np.uint8)).float().to(device)
-
+        dones       = torch.from_numpy(np.vstack([e.done       for e in experiences]).astype(np.uint8)).float().to(device)
         return (states, actions, rewards, next_states, dones), indices, weights
-
 
     def update_priorities(self, indices, td_errors):
         for i, err in zip(indices, td_errors):
-            self.priorities[i] = abs(err) + 1e-5  # small epsilon avoids zero priority
+            self.priorities[i] = abs(float(err)) + 1e-6
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Base Agent — Vanilla DQN
+# ──────────────────────────────────────────────────────────────────────────────
 
-class AgentDuelingDQN(AgentDQN):
-    """Interacts with and learns from the environment."""
+class AgentDQN:
+    """Vanilla DQN (Mnih et al., 2015)."""
 
     def __init__(self, state_size, action_size, seed):
-        super().__init__(state_size, action_size, seed)
-        """Initialize an Agent object.
-        
-        The problem
-        - A single stream learns Q(s,a) for each action. In many states the choice of action barely matters 
-        - the network wastes capacity learning action differences when the state value is what counts.
-        The fix
-        - Split the network into two streams: Value V(s) — how good is this state? and Advantage A(s,a) — how much better is action a vs the average? 
-        - Then recombine: Q = V + (A − mean(A)).
-        Why subtract mean(A)?
-        - Without it, V and A are not uniquely recoverable from Q — the decomposition is unidentifiable. 
-        - Subtracting the mean forces the advantage to sum to zero, making V and A each carry distinct meaning.
+        self.state_size  = state_size
+        self.action_size = action_size
+        self.seed        = random.seed(seed)
 
-        Params
-        ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            seed (int): random seed
-        """
-
-        # Q-DuelingNetwork 
-        self.qnetwork_local = QNetworkDueling(state_size, action_size, seed).to(device)
-        self.qnetwork_target = QNetworkDueling(state_size, action_size, seed).to(device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
-
-
-
-
-class AgentDistributionalDQN(AgentDQN):
-    """
-    The problem:
-    - Standard DQN predicts E[return] — a single scalar per action.
-    - The mean alone loses all information about risk, variance, multi-modal returns.
- 
-    The fix — Categorical / C51:
-    - Represent the return distribution as a categorical distribution over
-        N_ATOMS fixed support points z ∈ [V_MIN, V_MAX].
-    - The network outputs a probability vector p(s,a) of length n_atoms for
-        each action.  Q(s,a) = Σ z_i · p_i  is then derived, not directly predicted.
-    - Training minimises KL(projected target distribution ‖ predicted distribution).
- 
-    Why does projection matter?
-    - After a Bellman update r + γ·z the atoms shift and no longer lie on the
-        fixed support grid.  We must "project" the shifted atoms back onto the
-        grid before computing the KL loss — this is the distributional Bellman op.
-    """
- 
-    # Distributional hyperparameters
-    N_ATOMS = 51
-    V_MIN   = -10.0
-    V_MAX   =  10.0
- 
-    def __init__(self, state_size, action_size, seed):
-        # Call grandparent AgentDQN.__init__ to get memory, t_step, etc.
-        super().__init__(state_size, action_size, seed)
- 
-        # Replace scalar Q-networks with distributional ones
-        self.qnetwork_local  = QNetworkDistributional(
-            state_size, action_size, seed,
-            n_atoms=self.N_ATOMS, v_min=self.V_MIN, v_max=self.V_MAX
-        ).to(device)
-        self.qnetwork_target = QNetworkDistributional(
-            state_size, action_size, seed,
-            n_atoms=self.N_ATOMS, v_min=self.V_MIN, v_max=self.V_MAX
-        ).to(device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
- 
-        # Precompute the fixed support atoms on the right device
-        self.atoms = torch.linspace(self.V_MIN, self.V_MAX, self.N_ATOMS).to(device)
-        self.delta_z = (self.V_MAX - self.V_MIN) / (self.N_ATOMS - 1)
- 
-    # ── act: select action by expected Q = Σ z·p ─────────────────────────────
-    def act(self, state, eps=0.):
-        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
-        self.qnetwork_local.eval()
-        with torch.no_grad():
-            # q_values() returns scalar Q per action — same interface as base class
-            action_values = self.qnetwork_local.q_values(state)
-        self.qnetwork_local.train()
-        if random.random() > eps:
-            return np.argmax(action_values.cpu().data.numpy())
-        return random.choice(np.arange(self.action_size))
- 
-    # ── learn: distributional Bellman update ──────────────────────────────────
-    def learn(self, experiences, gamma):
-        states, actions, rewards, next_states, dones = experiences
-        batch_size = states.shape[0]
- 
-        with torch.no_grad():
-            # Select greedy actions in next states using the *local* network
-            #    (Double-DQN style — reduces overestimation)
-            next_q     = self.qnetwork_local.q_values(next_states)   # (B, A)
-            next_acts  = next_q.argmax(1)                             # (B,)
- 
-            # Get the target distribution for those greedy actions
-            next_probs = self.qnetwork_target(next_states)            # (B, A, N)
-            next_probs = next_probs[range(batch_size), next_acts]     # (B, N)
- 
-            # Project the Bellman-updated atoms back onto the fixed support
-            #    Tz_j = clip(r + γ·z_j, V_MIN, V_MAX)
-            Tz = rewards + (1 - dones) * gamma * self.atoms.unsqueeze(0)  # (B, N)
-            Tz = Tz.clamp(self.V_MIN, self.V_MAX)
- 
-            # Compute lower/upper atom indices and their interpolation coefficients
-            b  = (Tz - self.V_MIN) / self.delta_z          # (B, N) float index
-            lo = b.floor().long().clamp(0, self.N_ATOMS - 1)
-            hi = b.ceil().long().clamp(0, self.N_ATOMS - 1)
- 
-            # Distribute probability mass proportionally between lo and hi
-            m = torch.zeros(batch_size, self.N_ATOMS, device=device)
-            offset = torch.arange(batch_size, device=device).unsqueeze(1) * self.N_ATOMS
-            m.view(-1).scatter_add_(0, (lo + offset).view(-1), (next_probs * (hi.float() - b)).view(-1))
-            m.view(-1).scatter_add_(0, (hi + offset).view(-1), (next_probs * (b - lo.float())).view(-1))
-            # m is now the target distribution (B, N) on the fixed support
- 
-        # 4. Get predicted log-probabilities for the taken actions
-        log_probs = torch.log(self.qnetwork_local(states)[range(batch_size), actions.squeeze()] + 1e-8)  # (B, N)
- 
-        # Cross-entropy loss = -Σ m · log p  (equivalent to KL up to a constant)
-        loss = -(m * log_probs).sum(dim=1).mean()
- 
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
- 
- 
-
- 
-class AgentNoisyDQN(AgentDQN):
-    """
-    The problem:
-    - ε-greedy exploration is undirected: the same random noise is applied
-      regardless of the state or how uncertain the agent actually is.
- 
-    The fix — NoisyNets:
-    - Replace all Linear layers with NoisyLinear layers (μ + σ·ε weights).
-    - The network learns *per-weight* noise scales σ — naturally exploring more
-      in states where it is uncertain and less where it is confident.
-    - No external ε schedule is needed; pass eps=0 to act() always.
- 
-    The only code change vs AgentDQN:
-    - Swap QNetwork → QNetworkNoisy.
-    - Call reset_noise() after every gradient step so the next forward pass
-      uses fresh noise samples.
-    """
- 
-    def __init__(self, state_size, action_size, seed):
-        super().__init__(state_size, action_size, seed)
- 
-        # Replace scalar Q-networks with noisy versions
-        self.qnetwork_local  = QNetworkNoisy(state_size, action_size, seed).to(device)
-        self.qnetwork_target = QNetworkNoisy(state_size, action_size, seed).to(device)
+        self.qnetwork_local  = QNetwork(state_size, action_size, seed).to(device)
+        self.qnetwork_target = QNetwork(state_size, action_size, seed).to(device)
         self.optimizer       = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
- 
 
-    def act(self, state, eps=0.):
-        """
-        No ε-greedy needed — the noisy network provides built-in exploration.
-        eps is kept in the signature for compatibility with the dqn() training
-        loop but is ignored (equivalent to always exploiting, with noise
-        doing the exploration internally).
-        """
+        self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
+        self.t_step = 0
+
+    def step(self, state, action, reward, next_state, done):
+        self.memory.add(state, action, reward, next_state, done)
+        self.t_step = (self.t_step + 1) % UPDATE_EVERY
+        if self.t_step == 0 and len(self.memory) > BATCH_SIZE:
+            self.learn(self.memory.sample(), GAMMA)
+
+    def act(self, state, eps=0.0):
+        """Epsilon-greedy action selection."""
         state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state)
         self.qnetwork_local.train()
 
-        # Always greedy — noise in the network handles exploration
-        return np.argmax(action_values.cpu().data.numpy())
- 
+        if random.random() > eps:
+            return int(action_values.cpu().argmax())
+        return random.choice(range(self.action_size))
 
     def learn(self, experiences, gamma):
         states, actions, rewards, next_states, dones = experiences
- 
+
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-        Q_targets  = rewards + (gamma * Q_targets_next * (1 - dones))
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
- 
+        Q_targets      = rewards + gamma * Q_targets_next * (1 - dones)
+        Q_expected     = self.qnetwork_local(states).gather(1, actions)
+
         loss = F.mse_loss(Q_expected, Q_targets)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
- 
-        # Re-sample noise so the next forward pass explores differently
-        self.qnetwork_local.reset_noise()
-        self.qnetwork_target.reset_noise()
- 
         self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
- 
- 
-class MultiStepPrioritizedReplayBuffer(PrioritizedReplayBuffer):
-    """
-    Extends PrioritizedReplayBuffer with n-step return accumulation.
- 
-    The problem with 1-step TD:
-    - Each update propagates reward information by only one step.
-    - Learning is slow because early states in a trajectory must wait many
-      updates before they "feel" a reward that happened several steps later.
- 
-    The fix — n-step returns:
-    - Accumulate rewards over n steps:  G_t = r_t + γ·r_{t+1} + … + γ^{n-1}·r_{t+n-1}
-    - Use s_{t+n} as the bootstrap state.
-    - This effectively skips n-1 intermediate Bellman backups, making credit
-      assignment faster at the cost of a slight bias when n > 1.
- 
-    Implementation:
-    - A small deque (n_step_buffer) holds the last n transitions.
-    - Once full, we compute the accumulated return and store the compressed
-      (s_t, a_t, G_t, s_{t+n}, done_{t+n}) transition into the priority buffer.
-    """
- 
-    def __init__(self, action_size, buffer_size, batch_size, seed, alpha=0.6, beta_start=0.4, beta_frames=100_000, n_steps=3, gamma=GAMMA):
-        super().__init__(action_size, buffer_size, batch_size, seed, alpha)
-        self.n_steps      = n_steps
-        self.gamma        = gamma
-        # Temporary queue that collects the last n raw transitions
-        self.n_step_buffer = deque(maxlen=n_steps)
- 
 
-    def add(self, state, action, reward, next_state, done):
-        """Buffer a transition; only store to PER once n steps are accumulated."""
-        self.n_step_buffer.append((state, action, reward, next_state, done))
- 
-        if len(self.n_step_buffer) < self.n_steps:
-            # Not enough steps yet — keep collecting
-            return
- 
-        # Compute the n-step discounted return G_t
-        G          = 0.0
-        final_done = False
-        final_next = self.n_step_buffer[-1][3]   # s_{t+n}
-        for i, (_, _, r, ns, d) in enumerate(self.n_step_buffer):
-            G += (self.gamma ** i) * r
-            if d:
-                # Episode ended before n steps — use the terminal state
-                final_done = True
-                final_next = ns
-                break
- 
-        # Store the compressed transition into the prioritized buffer
-        first = self.n_step_buffer[0]
-        super().add(first[0], first[1], G, final_next, final_done)
- 
- 
- 
-class AgentRainbow(AgentDQN):
+    def soft_update(self, local_model, target_model, tau):
+        """theta_target = tau*theta_local + (1-tau)*theta_target"""
+        for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Double DQN
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgentDoubleDQN(AgentDQN):
     """
-    Rainbow combines six DQN improvements:
-        1. Double DQN          — local net selects action, target net evaluates it
-        2. Prioritized Replay  — sample by |TD error|, correct bias with IS weights
-        3. Dueling Networks    — separate value and advantage streams
-        4. Multi-step returns  — n-step TD targets for faster credit assignment
-        5. Distributional RL   — predict full return distribution (C51)
-        6. Noisy Nets          — learned per-weight exploration noise
- 
-    Architecture (3 + 5 + 6) lives in QNetworkRainbow.
-    Replay (2 + 4) lives in MultiStepPrioritizedReplayBuffer.
-    Learning (1) is implemented in learn() below.
- 
-    act() passes eps=0 — exploration is handled entirely by NoisyLinear layers.
+    Double DQN (van Hasselt et al., 2015).
+
+    Standard DQN uses the target net to both select AND evaluate the best next
+    action, causing systematic overestimation. Fix: local net selects the action,
+    target net evaluates it.
     """
- 
-    # Distributional hyperparameters (same as AgentDistributionalDQN for consistency)
-    N_ATOMS = 51
-    V_MIN   = -10.0
-    V_MAX   =  10.0
-    N_STEPS      = 3        # multi-step return horizon (used by Rainbow)
- 
-    def __init__(self, state_size, action_size, seed, n_steps=N_STEPS):
+
+    def __init__(self, state_size, action_size, seed):
         super().__init__(state_size, action_size, seed)
- 
-        # ── Architecture: Dueling + Distributional + Noisy ──────────────────
-        self.qnetwork_local  = QNetworkRainbow(
-            state_size, action_size, seed,
-            n_atoms=self.N_ATOMS, v_min=self.V_MIN, v_max=self.V_MAX
-        ).to(device)
-        self.qnetwork_target = QNetworkRainbow(
-            state_size, action_size, seed,
-            n_atoms=self.N_ATOMS, v_min=self.V_MIN, v_max=self.V_MAX
-        ).to(device)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
- 
-        # ── Replay: Prioritized + Multi-step ─────────────────────────────────
-        self.memory = MultiStepPrioritizedReplayBuffer(
-            action_size, BUFFER_SIZE, BATCH_SIZE, seed,
-            n_steps=n_steps, gamma=GAMMA
-        )
-        self.n_steps = n_steps
- 
-        # Support atoms
-        self.atoms   = torch.linspace(self.V_MIN, self.V_MAX, self.N_ATOMS).to(device)
-        self.delta_z = (self.V_MAX - self.V_MIN) / (self.N_ATOMS - 1)
- 
 
-    # ── act: greedy over expected Q — noise handles exploration ───────────────
-    def act(self, state, eps=0.):
-        """eps is ignored; NoisyLinear layers provide intrinsic exploration."""
-        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
-        self.qnetwork_local.eval()
-        with torch.no_grad():
-            action_values = self.qnetwork_local.q_values(state)
-        self.qnetwork_local.train()
-        return np.argmax(action_values.cpu().data.numpy())
- 
+    def learn(self, experiences, gamma):
+        states, actions, rewards, next_states, dones = experiences
 
-    # ── step: pull (experiences, indices, weights) from the PER buffer ────────
+        best_actions   = self.qnetwork_local(next_states).detach().argmax(1).unsqueeze(1)
+        Q_targets_next = self.qnetwork_target(next_states).detach().gather(1, best_actions)
+        Q_targets      = rewards + gamma * Q_targets_next * (1 - dones)
+        Q_expected     = self.qnetwork_local(states).gather(1, actions)
+
+        loss = F.mse_loss(Q_expected, Q_targets)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prioritized DQN
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgentPriorityDQN(AgentDQN):
+    """
+    Prioritized Experience Replay DQN (Schaul et al., 2015).
+
+    Samples high-TD-error transitions more often. IS weights correct the bias.
+    """
+
+    def __init__(self, state_size, action_size, seed):
+        super().__init__(state_size, action_size, seed)
+        self.memory = PrioritizedReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
+
     def step(self, state, action, reward, next_state, done):
         self.memory.add(state, action, reward, next_state, done)
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
         if self.t_step == 0 and len(self.memory) > BATCH_SIZE:
             experiences, indices, weights = self.memory.sample()
             self.learn(experiences, GAMMA, indices, weights)
- 
 
-    # ── learn: distributional Bellman + IS weights + Double DQN ───────────────
     def learn(self, experiences, gamma, indices, weights):
-        """
-        Combines:
-        - Double DQN (1): local selects next action, target evaluates
-        - Prioritized replay (2): weighted loss + priority update
-        - Distributional (5): KL loss on projected target distribution
-        - Multi-step (4): gamma is γ^n since rewards are already n-step sums
-        - Noise (6): reset_noise() called after the update
-        """
         states, actions, rewards, next_states, dones = experiences
-        batch_size = states.shape[0]
- 
-        # γ^n for the bootstrap — rewards already contain the n-step sum
-        gamma_n = gamma ** self.n_steps
- 
-        with torch.no_grad():
-            # 1. Double DQN: local picks next action, target evaluates distribution
-            next_q    = self.qnetwork_local.q_values(next_states)     # (B, A)
-            next_acts = next_q.argmax(1)                               # (B,)
-            next_probs = self.qnetwork_target(next_states)             # (B, A, N)
-            next_probs = next_probs[range(batch_size), next_acts]      # (B, N)
- 
-            # 2. Project Bellman-updated atoms onto fixed support
-            #    Tz_j = clip(r_n + γ^n · z_j, V_MIN, V_MAX)
-            Tz = rewards + (1 - dones) * gamma_n * self.atoms.unsqueeze(0)  # (B, N)
-            Tz = Tz.clamp(self.V_MIN, self.V_MAX)
- 
-            b  = (Tz - self.V_MIN) / self.delta_z
-            lo = b.floor().long().clamp(0, self.N_ATOMS - 1)
-            hi = b.ceil().long().clamp(0, self.N_ATOMS - 1)
- 
-            m = torch.zeros(batch_size, self.N_ATOMS, device=device)
-            offset = torch.arange(batch_size, device=device).unsqueeze(1) * self.N_ATOMS
-            m.view(-1).scatter_add_(0, (lo + offset).view(-1),
-                                    (next_probs * (hi.float() - b)).view(-1))
-            m.view(-1).scatter_add_(0, (hi + offset).view(-1),
-                                    (next_probs * (b - lo.float())).view(-1))
- 
-        # 3. Predicted log-probabilities for the taken actions
-        log_probs = torch.log(
-            self.qnetwork_local(states)[range(batch_size), actions.squeeze()] + 1e-8
-        )  # (B, N)
- 
-        # 4. Weighted cross-entropy loss (IS weights from PER)
-        elementwise_loss = -(m * log_probs).sum(dim=1)          # (B,)
-        loss = (weights * elementwise_loss).mean()
- 
-        # 5. Update priorities with the new TD errors
-        td_errors = elementwise_loss.detach().cpu().numpy()
+
+        Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
+        Q_targets      = rewards + gamma * Q_targets_next * (1 - dones)
+        Q_expected     = self.qnetwork_local(states).gather(1, actions)
+
+        td_errors = (Q_expected - Q_targets).detach().squeeze().cpu().numpy()
+        loss      = (weights * F.mse_loss(Q_expected, Q_targets, reduction='none').squeeze()).mean()
         self.memory.update_priorities(indices, td_errors)
- 
+
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
- 
-        # 6. Re-sample noise for the next step
-        self.qnetwork_local.reset_noise()
-        self.qnetwork_target.reset_noise()
- 
         self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Dueling DQN
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgentDuelingDQN(AgentDQN):
+    """
+    Dueling Network DQN (Wang et al., 2016).
+
+    Separate V(s) and A(s,a) streams. Q = V + (A - mean(A)).
+    learn() is identical to vanilla DQN — only the architecture changes.
+    """
+
+    def __init__(self, state_size, action_size, seed):
+        super().__init__(state_size, action_size, seed)
+        self.qnetwork_local  = QNetworkDueling(state_size, action_size, seed).to(device)
+        self.qnetwork_target = QNetworkDueling(state_size, action_size, seed).to(device)
+        self.optimizer       = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Distributional DQN  (C51)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _categorical_projection(rewards, dones, next_probs, atoms, v_min, v_max, n_atoms, gamma):
+    """
+    Categorical projection of the Bellman target (Algorithm 1 from C51 paper).
+
+    For each next-distribution atom z_j, compute the Bellman-updated atom:
+      T_z_j = clip(r + gamma*(1-done)*z_j, v_min, v_max)
+
+    Then distribute the probability p_j onto the two neighbouring grid atoms
+    l = floor(b) and u = ceil(b) where b = (T_z_j - v_min) / delta_z:
+      m_l += p_j * (u - b)
+      m_u += p_j * (b - l)
+
+    BUG FIX: when l == u (atom lands exactly on a grid point), both
+    coefficients (u-b) and (b-l) are zero, silently discarding the mass.
+    We detect this case and assign the full probability to l.
+
+    Args:
+      rewards:    (B, 1)
+      dones:      (B, 1)
+      next_probs: (B, N) — target distribution for the greedy next action
+      atoms:      (N,)   — fixed atom support [v_min, ..., v_max]
+      gamma:      scalar discount (already raised to n-th power for n-step)
+
+    Returns:
+      m: (B, N) — projected target distribution (rows sum to 1)
+    """
+    batch_size = rewards.size(0)
+    delta_z    = (v_max - v_min) / (n_atoms - 1)
+
+    # Bellman-shifted atoms, clipped to [v_min, v_max]
+    T_z = rewards + (1.0 - dones) * gamma * atoms.unsqueeze(0)  # (B, N)
+    T_z = T_z.clamp(v_min, v_max)
+
+    # Fractional atom indices
+    b = (T_z - v_min) / delta_z          # (B, N)  in [0, N-1]
+    l = b.floor().long().clamp(0, n_atoms - 1)
+    u = b.ceil().long().clamp(0, n_atoms - 1)
+
+    # Projection coefficients
+    lower_frac = u.float() - b            # contribution to floor atom
+    upper_frac = b - l.float()            # contribution to ceil atom
+
+    # FIX: when l == u (b is exactly integer), both fracs are 0 — assign all mass to l
+    eq_mask = (l == u)
+    lower_frac[eq_mask] = 1.0
+    upper_frac[eq_mask] = 0.0
+
+    # Scatter probability mass onto the target distribution tensor
+    m      = torch.zeros(batch_size, n_atoms, device=rewards.device)
+    offset = torch.arange(batch_size, device=rewards.device).unsqueeze(1) * n_atoms
+
+    m.view(-1).scatter_add_(0, (l + offset).view(-1), (next_probs * lower_frac).view(-1))
+    m.view(-1).scatter_add_(0, (u + offset).view(-1), (next_probs * upper_frac).view(-1))
+
+    return m   # (B, N), each row sums to 1
 
 
+class AgentDistributionalDQN(AgentDQN):
+    """
+    C51 — Categorical Distributional RL (Bellemare et al., 2017).
+
+    Learns P(G_t | s, a) as a probability mass over N atoms in [v_min, v_max]
+    instead of a scalar E[G_t | s, a].
+
+    Action selection uses the expected Q: argmax_a sum_i z_i * p_i(s, a).
+    Loss is cross-entropy between the projected Bellman target and the predicted
+    distribution for the action taken.
+
+    Three bugs fixed vs the previous version:
+      1. v_min/v_max: set to [-200, 200] to cover actual LunarLander return range.
+         Using [-10, 10] clips 100% of atoms for early-training episodes (~-200
+         score), producing zero gradient signal.
+      2. Categorical projection: when floor(b) == ceil(b) (atom lands exactly on
+         a grid point), the previous code assigned 0 probability — all mass lost.
+         Fixed by detecting the case and assigning full probability to that atom.
+      3. Target action selection: use TARGET network (not local) for next-action
+         selection in standalone C51. Using the local net (Double-DQN style) is
+         correct for Rainbow where local and target are more decorrelated, but for
+         vanilla C51 it adds instability without benefit.
+    """
+
+    def __init__(self, state_size, action_size, seed,
+                 n_atoms=51, v_min=-200.0, v_max=200.0):
+        super().__init__(state_size, action_size, seed)
+
+        self.n_atoms = n_atoms
+        self.v_min   = v_min
+        self.v_max   = v_max
+
+        self.qnetwork_local  = QNetworkDistributional(
+            state_size, action_size, seed, n_atoms=n_atoms, v_min=v_min, v_max=v_max
+        ).to(device)
+        self.qnetwork_target = QNetworkDistributional(
+            state_size, action_size, seed, n_atoms=n_atoms, v_min=v_min, v_max=v_max
+        ).to(device)
+        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
+
+        # Atom support on device (also lives inside the networks as a buffer,
+        # but we keep a reference here for use in learn())
+        self.atoms = torch.linspace(v_min, v_max, n_atoms).to(device)
+
+    def act(self, state, eps=0.0):
+        """Epsilon-greedy over expected Q-values: Q(s,a) = sum_i z_i * p_i(s,a)."""
+        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
+        self.qnetwork_local.eval()
+        with torch.no_grad():
+            q_values = self.qnetwork_local.q_values(state)   # (1, action_size)
+        self.qnetwork_local.train()
+
+        if random.random() > eps:
+            return int(q_values.cpu().argmax())
+        return random.choice(range(self.action_size))
+
+    def learn(self, experiences, gamma):
+        states, actions, rewards, next_states, dones = experiences
+        batch_size = states.size(0)
+
+        with torch.no_grad():
+            # Use TARGET network for next-action selection (standard C51).
+            # This is simpler and more stable than Double-DQN style for standalone C51.
+            next_q       = self.qnetwork_target.q_values(next_states)   # (B, A)
+            next_actions = next_q.argmax(dim=1)                          # (B,)
+
+            next_probs = self.qnetwork_target.get_probs(next_states)     # (B, A, N)
+            next_probs = next_probs[range(batch_size), next_actions]     # (B, N)
+
+            # Project the Bellman target onto the atom grid
+            m = _categorical_projection(
+                rewards, dones, next_probs,
+                self.atoms, self.v_min, self.v_max, self.n_atoms, gamma
+            )
+
+        # Predicted log-probabilities for the actions taken: (B, N)
+        log_probs   = self.qnetwork_local(states)                        # (B, A, N)
+        log_probs_a = log_probs[range(batch_size), actions.squeeze()]    # (B, N)
+
+        # Cross-entropy loss: -sum_i m_i * log(p_i)
+        loss = -(m * log_probs_a).sum(dim=1).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Noisy DQN
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgentNoisyDQN(AgentDQN):
+    """
+    Noisy DQN (Fortunato et al., 2017).
+
+    Replaces epsilon-greedy with parametric noise in the network weights.
+    The noise magnitude sigma is learnable: the network decides how much
+    randomness is useful in each state, annealing toward zero as it gains
+    confidence.
+
+    Two fixes vs the previous version:
+      1. reset_noise() is now called once per ACT step (not just learn), so
+         each action selection uses a freshly sampled noise realisation. The
+         previous version reused the same noise for the entire episode rollout,
+         severely limiting exploration diversity.
+      2. reset_noise() is also called on BOTH local and target networks in
+         learn(), so targets are not evaluated with stale noise.
+
+    Usage: pass eps_start=0, eps_end=0, eps_decay=1.0 to the training loop.
+    """
+
+    def __init__(self, state_size, action_size, seed):
+        super().__init__(state_size, action_size, seed)
+        self.qnetwork_local  = QNetworkNoisy(state_size, action_size, seed).to(device)
+        self.qnetwork_target = QNetworkNoisy(state_size, action_size, seed).to(device)
+        self.optimizer       = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
+
+    def act(self, state, eps=0.0):
+        """
+        Greedy w.r.t. the noisy network. Noise provides the exploration.
+        reset_noise() is called here so each action sees a fresh noise sample.
+        The network stays in train() mode so NoisyLinear uses noise.
+        """
+        # Resample noise before each action for diverse exploration
+        self.qnetwork_local.reset_noise()
+
+        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            action_values = self.qnetwork_local(state)
+        return int(action_values.cpu().argmax())
+
+    def learn(self, experiences, gamma):
+        states, actions, rewards, next_states, dones = experiences
+
+        # Resample noise in both networks so each learning step sees a
+        # fresh realisation and the target is not biased by stale noise.
+        self.qnetwork_local.reset_noise()
+        self.qnetwork_target.reset_noise()
+
+        Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
+        Q_targets      = rewards + gamma * Q_targets_next * (1 - dones)
+        Q_expected     = self.qnetwork_local(states).gather(1, actions)
+
+        loss = F.mse_loss(Q_expected, Q_targets)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Multi-step Buffer  (used by Rainbow)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MultiStepBuffer:
+    """
+    Accumulates raw transitions into n-step returns before storing in replay.
+
+    For trajectory (s_t, a_t, r_t, ..., s_{t+n}):
+      R_n = sum_{k=0}^{n-1} gamma^k * r_{t+k}
+
+    Stores (s_t, a_t, R_n, s_{t+n}, done_{t+n}).
+    The Bellman target for this transition is R_n + gamma^n * V(s_{t+n}),
+    so the agent's learn() must use gamma^n (not gamma) for the bootstrap.
+    """
+
+    def __init__(self, n_steps, gamma):
+        self.n_steps = n_steps
+        self.gamma   = gamma
+        self.buffer  = deque()
+
+    def add(self, state, action, reward, next_state, done):
+        """
+        Returns a list of completed n-step transitions (usually length 0 or 1).
+        At episode end, returns all remaining transitions flushed from the buffer.
+        """
+        self.buffer.append((state, action, reward, next_state, done))
+
+        if done:
+            results = []
+            while self.buffer:
+                results.append(self._build())
+                self.buffer.popleft()
+            return results
+
+        if len(self.buffer) == self.n_steps:
+            result = self._build()
+            self.buffer.popleft()
+            return [result]
+
+        return []
+
+    def _build(self):
+        """Build an n-step return from the front of the buffer."""
+        buf = list(self.buffer)
+        R   = 0.0
+        for k, (_, _, r, _, d) in enumerate(buf):
+            R += (self.gamma ** k) * r
+            if d:
+                # Episode ended at step k — no bootstrap beyond here
+                return (buf[0][0], buf[0][1], R, buf[k][3], True)
+        return (buf[0][0], buf[0][1], R, buf[-1][3], buf[-1][4])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rainbow Agent
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgentRainbow(AgentDistributionalDQN):
+    """
+    Rainbow DQN (Hessel et al., 2017).
+
+    Six improvements over vanilla DQN combined:
+      1. Double Q-learning   — local net selects next action, target net evaluates it
+      2. Prioritized replay  — high-TD-error transitions sampled more often
+      3. Dueling networks    — separate V(s) and A(s,a) streams per atom
+      4. Multi-step returns  — n-step Bellman backup, stored via MultiStepBuffer
+      5. Distributional RL   — full return distribution (C51) with fixed atom range
+      6. Noisy networks      — NoisyLinear replaces epsilon-greedy exploration
+
+    Inheritance: AgentRainbow -> AgentDistributionalDQN -> AgentDQN
+    We reuse the distributional act() (argmax expected Q) and override step/learn.
+    """
+
+    def __init__(self, state_size, action_size, seed,
+                 n_atoms=51, v_min=-200.0, v_max=200.0, n_steps=3):
+        super().__init__(state_size, action_size, seed,
+                         n_atoms=n_atoms, v_min=v_min, v_max=v_max)
+        self.n_steps = n_steps
+
+        # Rainbow network: dueling + distributional + noisy
+        self.qnetwork_local  = QNetworkRainbow(
+            state_size, action_size, seed, n_atoms=n_atoms, v_min=v_min, v_max=v_max
+        ).to(device)
+        self.qnetwork_target = QNetworkRainbow(
+            state_size, action_size, seed, n_atoms=n_atoms, v_min=v_min, v_max=v_max
+        ).to(device)
+        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
+
+        # Prioritized replay (improvement 2)
+        self.memory = PrioritizedReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
+
+        # Multi-step buffer (improvement 4)
+        self.multistep = MultiStepBuffer(n_steps=n_steps, gamma=GAMMA)
+
+    def act(self, state, eps=0.0):
+        """
+        Greedy w.r.t. expected Q-values. Noise provides exploration.
+        Reset noise before each act so each action sees a fresh sample.
+        """
+        self.qnetwork_local.reset_noise()
+
+        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            q_values = self.qnetwork_local.q_values(state)
+        return int(q_values.cpu().argmax())
+
+    def step(self, state, action, reward, next_state, done):
+        """Pass raw transitions through the n-step buffer, then into PER."""
+        completed = self.multistep.add(state, action, reward, next_state, done)
+        for s, a, R, s_next, d in completed:
+            self.memory.add(s, a, R, s_next, d)
+
+        self.t_step = (self.t_step + 1) % UPDATE_EVERY
+        if self.t_step == 0 and len(self.memory) > BATCH_SIZE:
+            experiences, indices, weights = self.memory.sample()
+            self.learn(experiences, GAMMA, indices, weights)
+
+    def learn(self, experiences, gamma, indices, weights):
+        """
+        Distributional Bellman update combining all six Rainbow improvements.
+
+        gamma^n is used for the bootstrap (not gamma) because the stored rewards
+        are already the n-step discounted sum R_n = sum_{k=0}^{n-1} gamma^k r_{t+k}.
+        The correct Bellman target is: T_z = R_n + gamma^n * z_j.
+        """
+        states, actions, rewards, next_states, dones = experiences
+        batch_size = states.size(0)
+
+        # Resample noise in both networks (improvement 6)
+        self.qnetwork_local.reset_noise()
+        self.qnetwork_target.reset_noise()
+
+        with torch.no_grad():
+            # Double DQN: local selects next action, target evaluates it (improvement 1)
+            next_q       = self.qnetwork_local.q_values(next_states)       # (B, A)
+            next_actions = next_q.argmax(dim=1)                             # (B,)
+
+            next_probs = self.qnetwork_target.get_probs(next_states)        # (B, A, N)
+            next_probs = next_probs[range(batch_size), next_actions]        # (B, N)
+
+            # Categorical projection with gamma^n discount (improvements 4 + 5)
+            gamma_n = gamma ** self.n_steps
+            m = _categorical_projection(
+                rewards, dones, next_probs,
+                self.atoms, self.v_min, self.v_max, self.n_atoms, gamma_n
+            )
+
+        # Predicted log-probabilities for actions taken: (B, N)
+        log_probs   = self.qnetwork_local(states)                           # (B, A, N)
+        log_probs_a = log_probs[range(batch_size), actions.squeeze()]       # (B, N)
+
+        # Per-sample cross-entropy loss
+        elementwise_loss = -(m * log_probs_a).sum(dim=1)                    # (B,)
+
+        # Weighted mean with IS weights (improvement 2)
+        loss = (weights * elementwise_loss).mean()
+
+        # Update priorities with per-sample loss as proxy for TD error
+        self.memory.update_priorities(indices, elementwise_loss.detach().cpu().numpy())
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), 10.0)
+        self.optimizer.step()
+        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Smoke test
+# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    agent = AgentDQN(state_size=8, action_size=4, seed=0)
-    print(len(list(agent.qnetwork_local.parameters())))
+    import torch
+
+    STATE, ACTION, SEED = 8, 4, 0
+
+    agents = [
+        (AgentDQN,               "Vanilla DQN"),
+        (AgentDoubleDQN,         "Double DQN"),
+        (AgentPriorityDQN,       "Priority DQN"),
+        (AgentDuelingDQN,        "Dueling DQN"),
+        (AgentDistributionalDQN, "Distributional DQN"),
+        (AgentNoisyDQN,          "Noisy DQN"),
+    ]
+    for AgentCls, name in agents:
+        a = AgentCls(STATE, ACTION, SEED)
+        n = sum(p.numel() for p in a.qnetwork_local.parameters())
+        print(f"{name:<25}: {n:>7} params")
+
+    r = AgentRainbow(STATE, ACTION, SEED, n_steps=3)
+    n = sum(p.numel() for p in r.qnetwork_local.parameters())
+    print(f"{'Rainbow':<25}: {n:>7} params")
+
+    # Verify projection sums to 1 for all edge cases
+    atoms = torch.linspace(-200, 200, 51)
+    rewards    = torch.tensor([[-150.0], [0.0], [200.0]])
+    dones      = torch.tensor([[0.0], [0.0], [1.0]])
+    next_probs = torch.ones(3, 51) / 51
+    m = _categorical_projection(rewards, dones, next_probs, atoms, -200, 200, 51, 0.99)
+    assert torch.allclose(m.sum(dim=1), torch.ones(3), atol=1e-5), \
+        f"Projection rows don't sum to 1: {m.sum(dim=1)}"
+    print("\nCategorical projection row sums:", m.sum(dim=1).tolist(), "✓")
+
+    # Verify noise varies between resets
+    ag = AgentNoisyDQN(STATE, ACTION, SEED)
+    s  = torch.randn(1, STATE).to(device)
+    ag.qnetwork_local.reset_noise()
+    q1 = ag.qnetwork_local(s).detach()
+    ag.qnetwork_local.reset_noise()
+    q2 = ag.qnetwork_local(s).detach()
+    assert not torch.allclose(q1, q2), "Noise not varying between resets!"
+    print("NoisyDQN noise varies between resets ✓")
