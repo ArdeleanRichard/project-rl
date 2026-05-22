@@ -30,7 +30,7 @@ class AgentA2C(BaseAgent):
         self.device = self.config['device']
 
         # Learning parameters
-        self.LR = self.config['learning_rate']
+        self.LR = self.config.get('learning_rate', 0.0)
         self.GAMMA = self.config['discount_factor']
         self.VALUE_COEF = self.config.get('value_loss_coef', 0.5)       # Critic loss weight
         self.ENTROPY_COEF = self.config.get('entropy_coef', 0.01)       # Exploration bonus

@@ -1,3 +1,4 @@
+from agent.agent_a2c import AgentA2C
 from agent.agent_ddpg import AgentDDPG
 from agent.agent_dqn import AgentDQN
 from agent.agent_dqn_distributional import AgentDistributionalDQN
@@ -59,3 +60,6 @@ class AgentCreator:
 
         if "ddpg" in self.config["name"]:
             return AgentDDPG(env=self.env, config=self.config)
+
+        if "a2c" in self.config["name"]:
+            return AgentA2C(env=self.env, config=self.config)
