@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Patch
 import seaborn as sns
 
-from environment_creator import EnvironmentCreator
+from creator_environment import EnvironmentCreator
 
 
 class Trainer:
@@ -137,7 +137,7 @@ class Trainer:
             rolling_length,
             "valid"
         )
-        axs[0].plot(range(len(reward_moving_average)), reward_moving_average)
+
         axs[0].set_ylabel("Average Reward")
         axs[0].set_xlabel("Episode")
 
@@ -154,14 +154,25 @@ class Trainer:
 
         # Training error (how much we're still learning)
         axs[2].set_title("Training Error")
-        training_error_moving_average = self.get_moving_avgs(
-            self.agent.training_error,
-            rolling_length,
-            "same"
-        )
-        axs[2].plot(range(len(training_error_moving_average)), training_error_moving_average)
+
+        if isinstance(self.agent.training_error, list):
+            training_error_moving_average = self.get_moving_avgs(
+                self.agent.training_error,
+                rolling_length,
+                "same"
+            )
+            axs[2].plot(range(len(training_error_moving_average)), training_error_moving_average)
+        if isinstance(self.agent.training_error, dict):
+            for key in self.agent.training_error.keys():
+                training_error_moving_average = self.get_moving_avgs(
+                    self.agent.training_error[key],
+                    rolling_length,
+                    "same"
+                )
+                axs[2].plot(range(len(training_error_moving_average)), training_error_moving_average, label=key)
         axs[2].set_ylabel("Temporal Difference Error")
         axs[2].set_xlabel("Step")
+
 
         plt.tight_layout()
         save_file = savefolder+f"agent_{self.agent.name}.png"

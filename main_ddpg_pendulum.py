@@ -7,7 +7,7 @@ from creator_trainer import Trainer
 SEED = 123
 
 config_env = {
-    "name"              : "LunarLander-v3",
+    "name"              : "Pendulum-v1",
     "n_episodes"        : 2_000,                                # Number of episodes to practice
 
     "seed": SEED,
@@ -18,22 +18,23 @@ config_env = {
     # "test_show"          : True,
     # "test_n_episodes"    : 5,
 
-    # threshold
-    "score_threshold"   : 200,
 }
 
 
+
 config_agent = {
-    "name"              : "dqn",
+    "name"              : "ddpg",
 
     "max_t"             : 1000,
-    "learning_rate"     : 5e-4,                                 # How fast to learn (higher = faster but less stable)
+    "learning_rate_actor"       : 1e-4,                         # How fast to learn (higher = faster but less stable)
+    "learning_rate_critic"      : 1e-3,                         # How fast to learn (higher = faster but less stable)
+    "weight_decay"              : 0,
     "discount_factor"   : 0.99,                                 # Always keep some exploration
     "start_epsilon"     : 1.0,                                  # Start with 100% random actions
     "final_epsilon"     : 0.01,
     "epsilon_decay"     : 0.995,                                # Reduce exploration over time
 
-    "batch_size"        : 64,                                   # minibatch size
+    "batch_size"        : 128,                                   # minibatch size
     "buffer_size"       : int(1e5),                             # replay buffer size
     "tau"               : 1e-3,                                 # for soft update of target parameters
     "update_every"      : 4,                                    # how often to update the network
@@ -41,7 +42,6 @@ config_agent = {
     "device"            : torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
     "seed": SEED,
 }
-
 
 # Create environment
 env_creator = EnvironmentCreator(config_env)

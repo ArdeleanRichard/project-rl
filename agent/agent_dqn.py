@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from agent.agent_base import BaseAgent
-from models.qnetwork import QNetwork
+from models.q_network import QNetwork
 
 
 class AgentDQN(BaseAgent):
@@ -15,7 +15,7 @@ class AgentDQN(BaseAgent):
 
     def __init__(self, env, config):
         super().__init__(env, config)
-        self.seed        = self.config['seed']
+        self.seed        = torch.manual_seed(self.config['seed'])
         self.device      = self.config['device']
 
         # Exploration parameters
@@ -30,8 +30,8 @@ class AgentDQN(BaseAgent):
         self.BUFFER_SIZE        = self.config['buffer_size']
         self.UPDATE_EVERY       = self.config['update_every']
 
-        self.qnetwork_local  = QNetwork(self.n_states, self.n_actions, self.seed).to(self.device)
-        self.qnetwork_target = QNetwork(self.n_states, self.n_actions, self.seed).to(self.device)
+        self.qnetwork_local  = QNetwork(self.n_states, self.n_actions).to(self.device)
+        self.qnetwork_target = QNetwork(self.n_states, self.n_actions).to(self.device)
         self.optimizer       = optim.Adam(self.qnetwork_local.parameters(), lr=self.LR)
 
         self.memory = ReplayBuffer(self.config)
@@ -55,14 +55,14 @@ class AgentDQN(BaseAgent):
         self.memory.add(state, action, reward, done, next_state)
         self.t_step = (self.t_step + 1) % self.UPDATE_EVERY
         if self.t_step == 0 and len(self.memory) > self.BATCH_SIZE:
-            self.learn(self.memory.sample(), self.GAMMA)
+            self.learn(self.memory.sample())
 
 
-    def learn(self, experiences, gamma):
+    def learn(self, experiences):
         states, actions, rewards, dones, next_states = experiences
 
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-        Q_targets      = rewards + gamma * Q_targets_next * (1 - dones)
+        Q_targets      = rewards + self.GAMMA * Q_targets_next * (1 - dones)
         Q_expected     = self.qnetwork_local(states).gather(1, actions)
 
         loss = F.mse_loss(Q_expected, Q_targets)
@@ -101,9 +101,7 @@ class ReplayBuffer:
         self.memory      = deque(maxlen=self.config["buffer_size"])
         self.batch_size  = self.config["batch_size"]
 
-        self.experience  = namedtuple(
-            "Experience", field_names=["state", "action", "reward", "done", "next_state"]
-        )
+        self.experience  = namedtuple("Experience", field_names=["state", "action", "reward", "done", "next_state"])
 
         self.device = self.config['device']
 

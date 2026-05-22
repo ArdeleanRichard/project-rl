@@ -237,7 +237,7 @@ def plot(rewards_over_seeds):
     sns.lineplot(x="episodes", y="reward", data=df1).set(
         title="REINFORCE for InvertedPendulum-v4"
     )
-    plt.show()
+    plt.savefig("./train.png")
 
 
 if __name__ == "__main__":

@@ -90,6 +90,7 @@ class A2C(nn.Module):
         action_logits_vec = self.actor(x)  # shape: [n_envs, n_actions]
         return (state_values, action_logits_vec)
 
+
     def select_action(
         self, x: np.ndarray
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:

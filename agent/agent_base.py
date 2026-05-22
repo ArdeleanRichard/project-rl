@@ -20,13 +20,13 @@ class BaseAgent:
         self.n_actions = get_space_size(self.env.action_space)
         self.n_states = get_space_size(self.env.observation_space)
 
-        self.lr =                   self.config["learning_rate"]
+        self.lr =                   self.config["learning_rate"] if "learning_rate" in self.config else 0.001
         self.discount_factor =      self.config["discount_factor"]  # How much we care about future rewards
 
         # Exploration parameters
         self.epsilon =              self.config["start_epsilon"]
-        self.epsilon_decay =        self.config["epsilon_decay"]
-        self.final_epsilon =        self.config["final_epsilon"]
+        self.epsilon_decay =        self.config["epsilon_decay"] if "epsilon_decay" in self.config else self.config["start_epsilon"]
+        self.final_epsilon =        self.config["final_epsilon"] if "final_epsilon" in self.config else self.config["start_epsilon"]
 
         self.name = config["name"]
         if "name_ext" in config:

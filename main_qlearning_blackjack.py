@@ -1,6 +1,6 @@
-from agent_creator import AgentCreator
-from environment_creator import EnvironmentCreator
-from trainer import Trainer
+from creator_agent import AgentCreator
+from creator_environment import EnvironmentCreator
+from creator_trainer import Trainer
 
 # Training hyperparameters
 config_env = {

@@ -68,6 +68,44 @@ class EnvironmentCreator:
             self.env = EnvWrapper(env, self.config)
             return self.env
 
+        if self.config["name"] == "InvertedPendulum-v5":
+            env = gym.make('InvertedPendulum-v5', render_mode="rgb_array")
+            obs, info = env.reset(seed=self.config["seed"])
+            env.action_space.seed(self.config["seed"])
+            env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=self.config["n_episodes"])
+
+            self.config["policy_type"] = "continuous"
+            self.env = EnvWrapper(env, self.config)
+            return self.env
+
+        if self.config["name"] == "CartPole-v1":
+            env = gym.make('CartPole-v1', render_mode="rgb_array")
+            obs, info = env.reset(seed=self.config["seed"])
+            env.action_space.seed(self.config["seed"])
+            env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=self.config["n_episodes"])
+
+            self.config["policy_type"] = "discrete"
+            self.env = EnvWrapper(env, self.config)
+            return self.env
+
+        if self.config["name"] == "BipedalWalker-v3":
+            env = gym.make('BipedalWalker-v3', render_mode="rgb_array")
+            obs, info = env.reset(seed=self.config["seed"])
+            env.action_space.seed(self.config["seed"])
+            env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=self.config["n_episodes"])
+
+            self.env = EnvWrapper(env, self.config)
+            return self.env
+
+        if self.config["name"] == "Pendulum-v1":
+            env = gym.make('Pendulum-v1', render_mode="rgb_array")
+            obs, info = env.reset(seed=self.config["seed"])
+            env.action_space.seed(self.config["seed"])
+            env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=self.config["n_episodes"])
+
+            self.env = EnvWrapper(env, self.config)
+            return self.env
+
     @staticmethod
     def create_test_env(config):
         if config["test_show"] == True:
@@ -91,6 +129,21 @@ class EnvironmentCreator:
             env_test = gym.make("Taxi-v3", render_mode=render_mode)
             return EnvWrapper(env_test, config)
 
+        if config["name"] == "InvertedPendulum-v5":
+            env_test = gym.make("InvertedPendulum-v5", render_mode=render_mode)
+            return EnvWrapper(env_test, config)
+
+        if config["name"] == "CartPole-v1":
+            env_test = gym.make("CartPole-v1", render_mode=render_mode)
+            return EnvWrapper(env_test, config)
+
+        if config["name"] == "BipedalWalker-v3":
+            env_test = gym.make("BipedalWalker-v3", render_mode=render_mode)
+            return EnvWrapper(env_test, config)
+
+        if config["name"] == "Pendulum-v1":
+            env_test = gym.make("Pendulum-v1", render_mode=render_mode)
+            return EnvWrapper(env_test, config)
 
 
     def print_info(self):

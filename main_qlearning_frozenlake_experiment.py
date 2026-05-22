@@ -1,4 +1,4 @@
-from experiment_creator import ExperimentCreator
+from creator_experiment import ExperimentCreator
 
 base_config_env = {
     "name"              : "FrozenLake-v1",

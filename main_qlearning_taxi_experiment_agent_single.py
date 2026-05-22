@@ -1,4 +1,4 @@
-from experiment_creator import ExperimentCreator
+from creator_experiment import ExperimentCreator
 
 BASE_RANDOM_SEED = 58922320
 n_runs = 10
