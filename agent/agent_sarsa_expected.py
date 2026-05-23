@@ -55,7 +55,7 @@ class AgentSarsaExpected(BaseSarsaAgent):
 
         # Update our estimate in the direction of the error
         # Learning rate controls how big steps we take
-        self.q_values[state][action] = (self.q_values[state][action] + self.lr * temporal_difference)
+        self.q_values[state][action] = (self.q_values[state][action] + self.LR * temporal_difference)
 
         # Track learning progress (useful for debugging)
         self.training_error.append(temporal_difference)

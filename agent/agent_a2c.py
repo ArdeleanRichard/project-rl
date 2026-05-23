@@ -10,34 +10,22 @@ from agent.agent_base import BaseAgent
 from models.actor_critic_network import ActorCriticNetwork
 
 
+
 class AgentA2C(BaseAgent):
-    """
-    Advantage Actor-Critic (A2C) Agent.
-
-    A2C is a synchronous version of A3C that uses:
-    - Actor: learns a policy π(a|s)
-    - Critic: learns a value function V(s)
-    - Advantage: A(s,a) = Q(s,a) - V(s) ≈ R + γV(s') - V(s)
-
-    The actor is trained to maximize expected advantage, while the critic
-    is trained to minimize the TD error. Uses n-step returns for better
-    credit assignment than 1-step TD.
-    """
-
     def __init__(self, env, config):
         super().__init__(env, config)
+
         self.seed = torch.manual_seed(self.config['seed'])
         self.device = self.config['device']
 
-        # Learning parameters
-        self.LR = self.config.get('learning_rate', 0.0)
+        self.ACTOR_LR = self.config.get('learning_rate_actor', self.config.get('learning_rate', 3e-4))
+        self.CRITIC_LR = self.config.get('learning_rate_critic', self.config.get('learning_rate', 3e-4))
         self.GAMMA = self.config['discount_factor']
-        self.VALUE_COEF = self.config.get('value_loss_coef', 0.5)       # Critic loss weight
-        self.ENTROPY_COEF = self.config.get('entropy_coef', 0.01)       # Exploration bonus
-        self.N_STEPS = self.config.get('n_steps', 5)                    # n-step returns
-        self.MAX_GRAD_NORM = self.config.get('max_grad_norm', 0.5)      # Gradient clipping
+        self.LAM = self.config.get('lam', 0.95)
+        self.ENTROPY_COEF = self.config.get('ent_coef', self.config.get('entropy_coef', 0.01))
+        self.N_STEPS = self.config.get('n_steps', 5)
+        self.MAX_GRAD_NORM = self.config.get('max_grad_norm', 0.5)
 
-        # Network
         network_layers = self.config.get('layers', [64, 64])
         self.ac_network = ActorCriticNetwork(
             self.n_states,
@@ -45,12 +33,12 @@ class AgentA2C(BaseAgent):
             layers=network_layers
         ).to(self.device)
 
-        self.optimizer = optim.Adam(self.ac_network.parameters(), lr=self.LR)
+        # Safer than separate optimizers, especially if the network has a shared trunk
+        lr = self.config.get('learning_rate', 3e-4)
+        self.optimizer = optim.Adam(self.ac_network.parameters(), lr=lr)
 
-        # Storage for n-step rollouts
-        self.rollout_buffer = RolloutBuffer(self.config, self.N_STEPS)
+        self.rollout_buffer = RolloutBuffer(self.config)
 
-        # Tracking for separate loss components
         self.training_error = {
             'total_loss': [],
             'actor_loss': [],
@@ -59,109 +47,90 @@ class AgentA2C(BaseAgent):
         }
 
     def select_action(self, state, info):
-        """
-        Sample action from the policy distribution π(a|s).
-        During training, samples stochastically for exploration.
-        During testing (epsilon=0), uses greedy argmax.
-        """
-        state = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(self.device)
+        state_tensor = torch.as_tensor(np.array(state), dtype=torch.float32, device=self.device).unsqueeze(0)
 
         self.ac_network.eval()
         with torch.no_grad():
-            action_logits, _ = self.ac_network(state)
-            action_probs = F.softmax(action_logits, dim=-1)
+            logits, _ = self.ac_network(state_tensor)
+            dist = Categorical(logits=logits)
+
+            # Keep greedy only for explicit evaluation when epsilon is set to 0
+            if getattr(self, "epsilon", 1.0) == 0.0:
+                action = logits.argmax(dim=-1)
+            else:
+                action = dist.sample()
+
         self.ac_network.train()
-
-        # Greedy action for testing
-        if self.epsilon == 0.0:
-            return int(action_probs.argmax())
-
-        # Stochastic sampling for training (exploration)
-        dist = Categorical(action_probs)
-        action = dist.sample()
         return int(action.item())
 
     def update(self, state, info, action, reward, done, next_state):
-        """
-        Store transition in rollout buffer.
-        When buffer is full or episode ends, perform learning update.
-        """
         self.rollout_buffer.add(state, action, reward, done, next_state)
 
-        # Learn when we have n steps OR episode ends
         if len(self.rollout_buffer) >= self.N_STEPS or done:
             self.learn()
             self.rollout_buffer.clear()
 
     def learn(self):
-        """
-        Update actor and critic using n-step returns.
-
-        Actor loss: -log π(a|s) * A(s,a) - β * H(π)
-        Critic loss: MSE between V(s) and n-step return
-
-        Where:
-        - A(s,a) is the advantage (how much better than average)
-        - H(π) is entropy (encourages exploration)
-        - β controls exploration strength
-        """
         if len(self.rollout_buffer) == 0:
             return
 
-        # Get stored transitions
-        states, actions, rewards, dones, next_states = self.rollout_buffer.get()
+        states, actions, rewards, dones, next_states, _, _, _ = self.rollout_buffer.get()
+        T = len(rewards)
 
-        # Convert to tensors
-        states = torch.FloatTensor(states).to(self.device)
-        actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
+        states_tensor = torch.as_tensor(states, dtype=torch.float32, device=self.device)
+        actions_tensor = torch.as_tensor(actions, dtype=torch.long, device=self.device)
+        rewards_tensor = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        dones_tensor = torch.as_tensor(dones, dtype=torch.float32, device=self.device)
+        masks = 1.0 - dones_tensor
 
-        # Compute n-step returns: R_t = r_t + γr_{t+1} + ... + γ^n V(s_{t+n})
+        # Current policy/value predictions for the whole rollout
+        logits, values = self.ac_network(states_tensor)
+        values = values.squeeze(-1)
+
+        dist = Categorical(logits=logits)
+        log_probs = dist.log_prob(actions_tensor)
+        entropy = dist.entropy()
+
+        # Bootstrap value from the last next_state
         with torch.no_grad():
-            _, next_values = self.ac_network(next_states)
-            returns = rewards + self.GAMMA * next_values * (1 - dones)
+            last_next_state = torch.as_tensor(
+                next_states[-1], dtype=torch.float32, device=self.device
+            ).unsqueeze(0)
+            _, final_value = self.ac_network(last_next_state)
+            final_value = final_value.squeeze(-1).squeeze(0)
 
-            # For n-step: accumulate discounted rewards backwards
-            n_step_returns = torch.zeros_like(rewards)
-            running_return = returns[-1]
-            for t in reversed(range(len(rewards))):
-                running_return = rewards[t] + self.GAMMA * running_return * (1 - dones[t])
-                n_step_returns[t] = running_return
+        with torch.no_grad():
+            values_ext = torch.cat([values.detach(), final_value.view(1)])
 
-        # Forward pass
-        action_logits, state_values = self.ac_network(states)
-        action_probs = F.softmax(action_logits, dim=-1)
-        dist = Categorical(action_probs)
+            advantages = torch.zeros(T, dtype=torch.float32, device=self.device)
+            gae = 0.0
 
-        # Compute advantages: A(s,a) = R - V(s)
-        advantages = n_step_returns - state_values
+            for t in reversed(range(T)):
+                delta = rewards_tensor[t] + self.GAMMA * values_ext[t + 1] * masks[t] - values_ext[t]
+                gae = delta + self.GAMMA * self.LAM * masks[t] * gae
+                advantages[t] = gae
 
-        # Actor loss: policy gradient with advantage
-        log_probs = dist.log_prob(actions.squeeze())
-        actor_loss = -(log_probs.unsqueeze(1) * advantages.detach()).mean()
+            # Normalize advantages for stability
+            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
-        # Critic loss: TD error
-        critic_loss = F.mse_loss(state_values, n_step_returns)
+            returns = advantages + values_ext[:T]
 
-        # Entropy bonus: encourages exploration
-        entropy = dist.entropy().mean()
+        actor_loss = -(log_probs * advantages).mean()
+        critic_loss = F.mse_loss(values, returns)
+        entropy_bonus = entropy.mean()
 
-        # Total loss
-        total_loss = actor_loss + self.VALUE_COEF * critic_loss - self.ENTROPY_COEF * entropy
+        total_loss = actor_loss + critic_loss - self.ENTROPY_COEF * entropy_bonus
 
-        # Optimization step
         self.optimizer.zero_grad()
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.ac_network.parameters(), self.MAX_GRAD_NORM)
         self.optimizer.step()
 
-        # Track losses
-        self.training_error['total_loss'].append(total_loss.detach().cpu().item())
-        self.training_error['actor_loss'].append(actor_loss.detach().cpu().item())
-        self.training_error['critic_loss'].append(critic_loss.detach().cpu().item())
-        self.training_error['entropy'].append(entropy.detach().cpu().item())
+        self.training_error['total_loss'].append(total_loss.item())
+        self.training_error['actor_loss'].append(actor_loss.item())
+        self.training_error['critic_loss'].append(critic_loss.item())
+        self.training_error['entropy'].append(entropy_bonus.item())
+
 
     def save_checkpoint(self):
         model_savefile = f"./models/{self.config['name']}_checkpoint.pth"
@@ -180,37 +149,56 @@ class AgentA2C(BaseAgent):
         pass
 
 
+
 class RolloutBuffer:
     """
-    Stores n-step trajectories for A2C learning.
+    Stores on-policy trajectories for A2C learning with GAE.
 
     Unlike DQN's replay buffer which stores and samples randomly,
     this buffer stores recent consecutive transitions and is cleared
     after each learning update (on-policy learning).
+
+    Additionally stores log_probs, state_values, and entropies computed
+    during action selection to avoid recomputation.
     """
 
-    def __init__(self, config, n_steps):
+    def __init__(self, config):
         self.config = config
-        self.n_steps = n_steps
+        self.n_steps = self.config.get('n_steps', 5)
         self.device = config['device']
 
+        # Transition data
         self.states = []
         self.actions = []
         self.rewards = []
         self.dones = []
         self.next_states = []
 
+        # Additional data from action selection
+        self.log_probs = []
+        self.state_values = []
+        self.entropies = []
+
     def add(self, state, action, reward, done, next_state):
         """Add a transition to the buffer."""
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
-        self.dones.append(done)
+        self.dones.append(float(done))  # Convert bool to float
         self.next_states.append(next_state)
+
+    def add_action_info(self, log_prob, state_value, entropy):
+        """
+        Add action selection info (called from select_action).
+        This avoids recomputing these values during learning.
+        """
+        self.log_probs.append(log_prob)
+        self.state_values.append(state_value)
+        self.entropies.append(entropy)
 
     def get(self):
         """
-        Return all stored transitions as numpy arrays.
+        Return all stored transitions and action info as numpy arrays.
         Called when buffer is full or episode ends.
         """
         return (
@@ -218,7 +206,10 @@ class RolloutBuffer:
             np.array(self.actions),
             np.array(self.rewards),
             np.array(self.dones),
-            np.array(self.next_states)
+            np.array(self.next_states),
+            np.array(self.log_probs),
+            np.array(self.state_values),
+            np.array(self.entropies)
         )
 
     def clear(self):
@@ -228,14 +219,12 @@ class RolloutBuffer:
         self.rewards = []
         self.dones = []
         self.next_states = []
+        self.log_probs = []
+        self.state_values = []
+        self.entropies = []
 
     def __len__(self):
         return len(self.states)
-
-
-
-
-
 
 
 

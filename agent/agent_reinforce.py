@@ -29,7 +29,7 @@ class AgentReinforce(BaseAgent):
         self.rewards = []       # Stores the corresponding rewards
 
         self.net = Policy_Network(self.n_states, self.n_actions, policy_type=self.policy_type)
-        self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=self.lr)
+        self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=self.LR)
 
 
     def select_action(self, state, info) -> float:
