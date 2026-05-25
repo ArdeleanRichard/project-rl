@@ -33,7 +33,7 @@ class Actor(nn.Module):
     def reset_parameters(self):
         for fc in self.fcs[:-1]:
             fc.weight.data.uniform_(*hidden_init(fc))
-        self.fcs[:-1].weight.data.uniform_(-3e-3, 3e-3)
+        self.fcs[-1].weight.data.uniform_(-3e-3, 3e-3)
 
     def forward(self, state):
         """Build an actor (policy) network that maps states -> actions."""
@@ -59,7 +59,7 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         layer_sizes = [state_size] + layers + [1]
-        layer_sizes[1] += + action_size
+        layer_sizes[1] += action_size
         self.fcs = nn.ModuleList([
             nn.Linear(layer_sizes[i], layer_sizes[i + 1])
             for i in range(len(layer_sizes) - 1)
@@ -68,7 +68,7 @@ class Critic(nn.Module):
         self.reset_parameters()
 
     def forward(self, state, action):
-        xs = F.leaky_relu(self.fcs1(state))
+        xs = F.leaky_relu(self.fcs[0](state))
         x = torch.cat((xs, action), dim=1)
         for fc in self.fcs[1:-1]:
             x = F.leaky_relu(fc(x))
@@ -111,6 +111,22 @@ class ActorCriticNetwork(nn.Module):
 
         # Critic head: outputs state value
         self.critic = nn.Linear(hidden, 1)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Initialize weights properly for RL."""
+        for layer in self.shared_layers:
+            nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
+            nn.init.constant_(layer.bias, 0.0)
+
+        # Actor head gets small initialization
+        nn.init.orthogonal_(self.actor.weight, gain=0.01)
+        nn.init.constant_(self.actor.bias, 0.0)
+
+        # Critic head gets normal initialization
+        nn.init.orthogonal_(self.critic.weight, gain=1.0)
+        nn.init.constant_(self.critic.bias, 0.0)
 
     def forward(self, state):
         """

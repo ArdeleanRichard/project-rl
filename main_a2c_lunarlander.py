@@ -24,12 +24,15 @@ config_env = {
 config_agent = {
     "name"              : "a2c",
 
-    "learning_rate_actor"       : 1e-4,                         # How fast to learn (higher = faster but less stable)
-    "learning_rate_critic"      : 5e-4,                         # How fast to learn (higher = faster but less stable)
-    "discount_factor"           : 0.999,                        # Always keep some exploration
+    "learning_rate_actor"       : 3e-4,                         # How fast to learn (higher = faster but less stable)
+    "learning_rate_critic"      : 1e-3,                         # How fast to learn (higher = faster but less stable)
+    "discount_factor"           : 0.99,                         # Always keep some exploration
     "lam"                       : 0.95,                         # hyperparameter for GAE
-    "ent_coef"                  : 0.01,                         # coefficient for the entropy bonus (to encourage exploration)
-    "n_steps"                   : 5,
+    "vf_coef"                   : 0.5,                          # Value Function Coefficient (weight the critic loss)
+    "ent_coef"                  : 0.01,                          # coefficient for the entropy bonus (to encourage exploration)
+    "n_steps"                   : 128,
+
+    'layers'                    : [256, 256],
 
     "device"            : torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
     "seed"              : SEED,

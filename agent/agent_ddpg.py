@@ -57,8 +57,8 @@ class AgentDDPG(BaseAgent):
 
         # Track learning progress
         self.training_error = {
-            "actor": [],
-            "critic": []
+            "actor_loss": [],
+            "critic_loss": []
         }
 
     def update(self, state, info, action, reward, done, next_state):
@@ -126,8 +126,8 @@ class AgentDDPG(BaseAgent):
         self.soft_update(self.critic_local, self.critic_target, self.TAU)
         self.soft_update(self.actor_local, self.actor_target, self.TAU)
 
-        self.training_error["actor"].append(actor_loss.detach().cpu().item())
-        self.training_error["critic"].append(critic_loss.detach().cpu().item())
+        self.training_error["actor_loss"].append(actor_loss.detach().cpu().item())
+        self.training_error["critic_loss"].append(critic_loss.detach().cpu().item())
 
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.

@@ -22,7 +22,8 @@ class AgentA2C(BaseAgent):
         self.CRITIC_LR = self.config.get('learning_rate_critic', self.config.get('learning_rate', 3e-4))
         self.GAMMA = self.config['discount_factor']
         self.LAM = self.config.get('lam', 0.95)
-        self.ENTROPY_COEF = self.config.get('ent_coef', self.config.get('entropy_coef', 0.01))
+        self.VF_COEF = self.config.get('vf_coef', 0.5)
+        self.ENTROPY_COEF = self.config.get('ent_coef', 0.01)
         self.N_STEPS = self.config.get('n_steps', 5)
         self.MAX_GRAD_NORM = self.config.get('max_grad_norm', 0.5)
 
@@ -34,8 +35,17 @@ class AgentA2C(BaseAgent):
         ).to(self.device)
 
         # Safer than separate optimizers, especially if the network has a shared trunk
-        lr = self.config.get('learning_rate', 3e-4)
-        self.optimizer = optim.Adam(self.ac_network.parameters(), lr=lr)
+        # lr = self.config.get('learning_rate', 3e-4)
+        # self.optimizer = optim.Adam(self.ac_network.parameters(), lr=lr)
+
+        self.actor_params = []
+        self.critic_params = []
+
+        self.optimizer = optim.Adam([
+            {'params': self.ac_network.shared_layers.parameters(), 'lr': self.config.get('learning_rate', 3e-4)},
+            {'params': self.ac_network.actor.parameters(), 'lr': self.ACTOR_LR},
+            {'params': self.ac_network.critic.parameters(), 'lr': self.CRITIC_LR},
+        ])
 
         self.rollout_buffer = RolloutBuffer(self.config)
 
@@ -53,12 +63,7 @@ class AgentA2C(BaseAgent):
         with torch.no_grad():
             logits, _ = self.ac_network(state_tensor)
             dist = Categorical(logits=logits)
-
-            # Keep greedy only for explicit evaluation when epsilon is set to 0
-            if getattr(self, "epsilon", 1.0) == 0.0:
-                action = logits.argmax(dim=-1)
-            else:
-                action = dist.sample()
+            action = dist.sample()  # ← ALWAYS sample (stochastic policy)
 
         self.ac_network.train()
         return int(action.item())
@@ -74,7 +79,7 @@ class AgentA2C(BaseAgent):
         if len(self.rollout_buffer) == 0:
             return
 
-        states, actions, rewards, dones, next_states, _, _, _ = self.rollout_buffer.get()
+        states, actions, rewards, dones, next_states = self.rollout_buffer.get()
         T = len(rewards)
 
         states_tensor = torch.as_tensor(states, dtype=torch.float32, device=self.device)
@@ -83,25 +88,31 @@ class AgentA2C(BaseAgent):
         dones_tensor = torch.as_tensor(dones, dtype=torch.float32, device=self.device)
         masks = 1.0 - dones_tensor
 
-        # Current policy/value predictions for the whole rollout
-        logits, values = self.ac_network(states_tensor)
-        values = values.squeeze(-1)
-
-        dist = Categorical(logits=logits)
-        log_probs = dist.log_prob(actions_tensor)
-        entropy = dist.entropy()
-
-        # Bootstrap value from the last next_state
         with torch.no_grad():
+            # Get value estimates
+            _, old_values = self.ac_network(states_tensor)
+            old_values = old_values.squeeze(-1)
+
+            # Bootstrap from final state
             last_next_state = torch.as_tensor(
                 next_states[-1], dtype=torch.float32, device=self.device
             ).unsqueeze(0)
-            _, final_value = self.ac_network(last_next_state)
-            final_value = final_value.squeeze(-1).squeeze(0)
+            _, bootstrap_value = self.ac_network(last_next_state)
+            bootstrap_value = bootstrap_value.squeeze(-1).squeeze(0)
 
-        with torch.no_grad():
-            values_ext = torch.cat([values.detach(), final_value.view(1)])
+            # If episode ended, bootstrap value should be 0
+            if dones[-1]:
+                bootstrap_value = torch.tensor(0.0, device=self.device)
 
+            # Compute returns via bootstrapping (for critic target)
+            returns = torch.zeros(T, dtype=torch.float32, device=self.device)
+            R = bootstrap_value
+            for t in reversed(range(T)):
+                R = rewards_tensor[t] + self.GAMMA * R * masks[t]
+                returns[t] = R
+
+            # Compute advantages using GAE
+            values_ext = torch.cat([old_values, bootstrap_value.view(1)])
             advantages = torch.zeros(T, dtype=torch.float32, device=self.device)
             gae = 0.0
 
@@ -110,16 +121,36 @@ class AgentA2C(BaseAgent):
                 gae = delta + self.GAMMA * self.LAM * masks[t] * gae
                 advantages[t] = gae
 
-            # Normalize advantages for stability
-            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
+            # Store unnormalized for logging
+            advantages_unnorm = advantages.clone()
 
-            returns = advantages + values_ext[:T]
+            # Normalize advantages (for actor loss only)
+            if advantages.numel() > 1:
+                adv_mean = advantages.mean()
+                adv_std = advantages.std()
+                if adv_std > 1e-4:
+                    advantages = (advantages - adv_mean) / (adv_std + 1e-8)
 
+            if returns.numel() > 1:
+                returns_mean = returns.mean()
+                returns_std = returns.std()
+                if returns_std > 1e-4:
+                    returns = (returns - returns_mean) / (returns_std + 1e-8)
+
+        # Compute NEW predictions
+        logits, new_values = self.ac_network(states_tensor)
+        new_values = new_values.squeeze(-1)
+
+        dist = Categorical(logits=logits)
+        log_probs = dist.log_prob(actions_tensor)
+        entropy = dist.entropy()
+
+        # Compute losses
         actor_loss = -(log_probs * advantages).mean()
-        critic_loss = F.mse_loss(values, returns)
+        critic_loss = F.mse_loss(new_values, returns)  # Use returns, not advantages!
         entropy_bonus = entropy.mean()
 
-        total_loss = actor_loss + critic_loss - self.ENTROPY_COEF * entropy_bonus
+        total_loss = actor_loss + self.VF_COEF * critic_loss - self.ENTROPY_COEF * entropy_bonus
 
         self.optimizer.zero_grad()
         total_loss.backward()
@@ -131,6 +162,12 @@ class AgentA2C(BaseAgent):
         self.training_error['critic_loss'].append(critic_loss.item())
         self.training_error['entropy'].append(entropy_bonus.item())
 
+        # Better logging
+        if len(self.training_error['total_loss']) % 100 == 0:
+            print(f"Loss: {total_loss.item():.4f} | Actor: {actor_loss.item():.4f} | "
+                  f"Critic: {critic_loss.item():.4f} | Entropy: {entropy_bonus.item():.4f} | "
+                  f"Avg Adv (unnorm): {advantages_unnorm.mean().item():.4f} | "
+                  f"Avg Return: {returns.mean().item():.4f} | Avg Reward: {rewards_tensor.mean().item():.4f}")
 
     def save_checkpoint(self):
         model_savefile = f"./models/{self.config['name']}_checkpoint.pth"
@@ -174,10 +211,6 @@ class RolloutBuffer:
         self.dones = []
         self.next_states = []
 
-        # Additional data from action selection
-        self.log_probs = []
-        self.state_values = []
-        self.entropies = []
 
     def add(self, state, action, reward, done, next_state):
         """Add a transition to the buffer."""
@@ -187,14 +220,6 @@ class RolloutBuffer:
         self.dones.append(float(done))  # Convert bool to float
         self.next_states.append(next_state)
 
-    def add_action_info(self, log_prob, state_value, entropy):
-        """
-        Add action selection info (called from select_action).
-        This avoids recomputing these values during learning.
-        """
-        self.log_probs.append(log_prob)
-        self.state_values.append(state_value)
-        self.entropies.append(entropy)
 
     def get(self):
         """
@@ -207,9 +232,6 @@ class RolloutBuffer:
             np.array(self.rewards),
             np.array(self.dones),
             np.array(self.next_states),
-            np.array(self.log_probs),
-            np.array(self.state_values),
-            np.array(self.entropies)
         )
 
     def clear(self):
@@ -219,9 +241,6 @@ class RolloutBuffer:
         self.rewards = []
         self.dones = []
         self.next_states = []
-        self.log_probs = []
-        self.state_values = []
-        self.entropies = []
 
     def __len__(self):
         return len(self.states)
