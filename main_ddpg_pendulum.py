@@ -30,9 +30,6 @@ config_agent = {
     "learning_rate_critic"      : 1e-3,                         # How fast to learn (higher = faster but less stable)
     "weight_decay"              : 0,
     "discount_factor"   : 0.99,                                 # Always keep some exploration
-    "start_epsilon"     : 1.0,                                  # Start with 100% random actions
-    "final_epsilon"     : 0.01,
-    "epsilon_decay"     : 0.995,                                # Reduce exploration over time
 
     "batch_size"        : 128,                                   # minibatch size
     "buffer_size"       : int(1e5),                             # replay buffer size

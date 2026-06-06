@@ -57,14 +57,9 @@ class Trainer:
             all_rewards.append(total_reward)
             rewards_window.append(total_reward)
 
-            pbar.set_postfix({
-                "eps": f"{self.agent.epsilon:.3f}",
-                "reward": f"{total_reward:.2f}",
-                "avg100": f"{np.mean(rewards_window):.2f}"
-            })
+            postfix = self.printer(episode, total_reward, rewards_window)
 
-            if episode % (self.env.config['n_episodes'] // 10) == 0:
-                print(f'\rEpisode {episode}\t\tEps: {self.agent.epsilon:.3f}\t\tAverage Score: {np.mean(rewards_window):.2f}')
+            pbar.set_postfix(postfix)
 
             if "score_threshold" in self.env.config:
                 if np.mean(rewards_window) >= self.env.config["score_threshold"]:
@@ -72,6 +67,66 @@ class Trainer:
                     break
 
         return all_rewards
+
+    def printer(self, episode, total_reward, rewards_window):
+        if self.agent.name in ["q_learning", "sarsa_zero", "sarsa_expected"]:
+            postfix = {
+                "eps": f"{self.agent.epsilon:.3f}",
+                "loss": f"{self.agent.training_error[-1]:.3f}",
+                "reward": f"{total_reward:.2f}",
+                "avg100": f"{np.mean(rewards_window):.2f}"
+            }
+
+            if episode % (self.env.config['n_episodes'] // 10) == 0:
+                print(f'\rEpisode {episode}\t\tEps: {self.agent.epsilon:.3f}\t\tLoss: {self.agent.training_error[-1]:.3f}\t\tAverage Score: {np.mean(rewards_window):.2f}')
+        elif self.agent.name in ["dqn", "dqn_double", "dqn_dueling", "dqn_priority", "dqn_distributional", "dqn_noisy", "dqn_rainbow"]:
+            postfix = {
+                "eps": f"{self.agent.epsilon:.3f}",
+                "loss": f"{self.agent.training_error[-1]:.3f}",
+                "reward": f"{total_reward:.2f}",
+                "avg100": f"{np.mean(rewards_window):.2f}"
+            }
+            if episode % (self.env.config['n_episodes'] // 10) == 0:
+                print(f'\rEpisode {episode}\t\tEps: {self.agent.epsilon:.3f}\t\tLoss: {self.agent.training_error[-1]:.3f}\t\tAverage Score: {np.mean(rewards_window):.2f}')
+        elif self.agent.name in ["ddpg"]:
+            postfix = {
+                "actor_loss": f"{self.agent.training_error["actor_loss"][-1]:.3f}",
+                "critic_loss": f"{self.agent.training_error["critic_loss"][-1]:.3f}",
+                "reward": f"{total_reward:.2f}",
+                "avg100": f"{np.mean(rewards_window):.2f}"
+            }
+            if episode % (self.env.config['n_episodes'] // 10) == 0:
+
+                print(f'\rEpisode {episode}\t\tEps: {self.agent.epsilon:.3f}'
+                      f'\t\tActorLoss: {self.agent.training_error["actor"][-1]:.3f}\t\tCriticLoss: {self.agent.training_error["critic"][-1]:.3f}'
+                      f'\t\tAverage Score: {np.mean(rewards_window):.2f}')
+        elif self.agent.name in ["reinforce"]:
+            postfix = {
+                "loss": f"{self.agent.training_error[-1]:.3f}",
+                "reward": f"{total_reward:.2f}",
+                "avg100": f"{np.mean(rewards_window):.2f}"
+            }
+
+            if episode % (self.env.config['n_episodes'] // 10) == 0:
+                print(f'\rEpisode {episode}\t\tLoss: {self.agent.training_error[-1]:.3f}\t\tAverage Score: {np.mean(rewards_window):.2f}')
+        elif self.agent.name in ["a2c"]:
+            postfix = {
+                "loss": f"{self.agent.training_error["total_loss"][-1]:.3f}",
+                "actor_loss": f"{self.agent.training_error["actor_loss"][-1]:.3f}",
+                "critic_loss": f"{self.agent.training_error["critic_loss"][-1]:.3f}",
+                "entropy": f"{self.agent.training_error["entropy"][-1]:.3f}",
+                "reward": f"{total_reward:.2f}",
+                "avg100": f"{np.mean(rewards_window):.2f}"
+            }
+
+            if episode % (self.env.config['n_episodes'] // 10) == 0:
+                print(f'\rEpisode {episode}\t\tLoss: {self.agent.training_error["total_loss"][-1]:.3f}'
+                      f'\t\tActorLoss: {self.agent.training_error["actor_loss"][-1]:.3f}\t\tCriticLoss: {self.agent.training_error["critic_loss"][-1]:.3f}'
+                      f'\t\tEntropy: {self.agent.training_error["entropy"][-1]:.3f}'
+                      f'\t\tAverage Score: {np.mean(rewards_window):.2f}')
+
+
+        return postfix
 
 
     # Test the trained agent

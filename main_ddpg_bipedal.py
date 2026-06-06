@@ -31,9 +31,6 @@ config_agent = {
     "weight_decay"              : 0.0001,                       # L2 weight decay
 
     "discount_factor"   : 0.99,                                 # Always keep some exploration
-    "start_epsilon"     : 1.0,                                  # Start with 100% random actions
-    "final_epsilon"     : 0.01,
-    "epsilon_decay"     : 0.995,                                # Reduce exploration over time
 
     "batch_size"        : 128,                                   # minibatch size
     "buffer_size"       : int(1e6),                             # replay buffer size
